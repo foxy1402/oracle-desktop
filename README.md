@@ -65,7 +65,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete details.
 ssh opc@YOUR_INSTANCE_IP
 
 # Download the installer
-git clone https://github.com/yourusername/oracle-desktop.git
+git clone https://github.com/foxy1402/oracle-desktop.git
 cd oracle-desktop
 
 # Make executable
