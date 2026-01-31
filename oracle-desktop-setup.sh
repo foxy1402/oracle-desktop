@@ -637,11 +637,12 @@ After=syslog.target network.target
 [Service]
 Type=forking
 User=${REAL_USER}
-PAMName=login
+Group=${REAL_USER}
+WorkingDirectory=/home/${REAL_USER}
 PIDFile=/home/${REAL_USER}/.vnc/%H:1.pid
 ExecStartPre=/bin/sh -c '/usr/bin/vncserver -kill :1 > /dev/null 2>&1 || :'
-ExecStart=/bin/su ${REAL_USER} -c '/usr/bin/vncserver :1 -geometry 1920x1080 -depth 24 -localhost no'
-ExecStop=/bin/su ${REAL_USER} -c '/usr/bin/vncserver -kill :1'
+ExecStart=/usr/bin/vncserver :1 -geometry 1920x1080 -depth 24 -localhost no
+ExecStop=/usr/bin/vncserver -kill :1
 Restart=on-failure
 RestartSec=10
 
