@@ -627,20 +627,21 @@ configure_firewall() {
 setup_systemd_service() {
     log "Setting up systemd service..."
     
-    # Create VNC service file - using actual username
-    cat > /etc/systemd/system/vncserver@.service << EOF
+    # Create user-specific VNC service file
+    local service_file="/etc/systemd/system/vncserver@${REAL_USER}.service"
+    cat > "$service_file" << EOF
 [Unit]
-Description=Remote desktop service (VNC) for %i
+Description=Remote desktop service (VNC) for ${REAL_USER}
 After=syslog.target network.target
 
 [Service]
-Type=simple
-User=%i
+Type=forking
+User=${REAL_USER}
 PAMName=login
-PIDFile=/home/%i/.vnc/%H:%i.pid
-ExecStartPre=/bin/sh -c '/usr/bin/vncserver -kill :%i > /dev/null 2>&1 || :'
-ExecStart=/usr/bin/vncserver :%i -geometry 1920x1080 -depth 24 -localhost no
-ExecStop=/usr/bin/vncserver -kill :%i
+PIDFile=/home/${REAL_USER}/.vnc/%H:1.pid
+ExecStartPre=/bin/sh -c '/usr/bin/vncserver -kill :1 > /dev/null 2>&1 || :'
+ExecStart=/bin/su ${REAL_USER} -c '/usr/bin/vncserver :1 -geometry 1920x1080 -depth 24 -localhost no'
+ExecStop=/bin/su ${REAL_USER} -c '/usr/bin/vncserver -kill :1'
 Restart=on-failure
 RestartSec=10
 
