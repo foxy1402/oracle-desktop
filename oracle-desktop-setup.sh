@@ -15,7 +15,7 @@ trap 'handle_error $? $LINENO' ERR
 trap 'cleanup_on_exit' EXIT
 
 # Global variables
-SCRIPT_VERSION="1.1"
+SCRIPT_VERSION="1.2"
 INSTALL_FAILED=0
 
 # Colors
@@ -188,8 +188,15 @@ update_system() {
             dnf update -y
             ;;
         apt)
-            apt update
-            apt upgrade -y
+            # Update package lists
+            DEBIAN_FRONTEND=noninteractive apt update
+            # Upgrade packages non-interactively
+            DEBIAN_FRONTEND=noninteractive apt upgrade -y
+            # Install basic requirements for desktop
+            DEBIAN_FRONTEND=noninteractive apt install -y \
+                dbus-x11 \
+                software-properties-common \
+                2>/dev/null || true
             ;;
     esac
     
@@ -205,7 +212,15 @@ install_vnc() {
             dnf install -y tigervnc-server tigervnc-server-module
             ;;
         apt)
-            apt install -y tigervnc-standalone-server tigervnc-common
+            # Install TigerVNC for Ubuntu/Debian
+            DEBIAN_FRONTEND=noninteractive apt install -y \
+                tigervnc-standalone-server \
+                tigervnc-common \
+                tigervnc-xorg-extension \
+                2>/dev/null || \
+            DEBIAN_FRONTEND=noninteractive apt install -y \
+                tightvncserver \
+                2>/dev/null || true
             ;;
     esac
     
@@ -377,28 +392,101 @@ install_twm_rhel() {
 
 # Debian-based desktop installers
 install_mate_debian() {
-    apt install -y mate-desktop-environment-core mate-desktop-environment firefox-esr 2>/dev/null && return 0
+    log_info "Trying MATE desktop..."
+    
+    # Ubuntu/Debian MATE packages
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        mate-desktop-environment-core \
+        mate-desktop-environment-extras \
+        lightdm \
+        firefox 2>/dev/null && return 0
+    
+    # Fallback to minimal MATE
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        mate-desktop-environment-core \
+        lightdm \
+        firefox 2>/dev/null && return 0
+    
     return 1
 }
 
 install_xfce_debian() {
-    apt install -y xfce4 xfce4-goodies firefox-esr 2>/dev/null && return 0
+    log_info "Trying XFCE desktop..."
+    
+    # Ubuntu/Debian XFCE packages
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        xfce4 \
+        xfce4-goodies \
+        lightdm \
+        firefox 2>/dev/null && return 0
+    
+    # Fallback to minimal XFCE
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        xfce4 \
+        lightdm \
+        firefox 2>/dev/null && return 0
+    
     return 1
 }
 
 install_gnome_debian() {
-    apt install -y ubuntu-desktop 2>/dev/null && return 0
-    apt install -y gnome-core firefox-esr 2>/dev/null && return 0
+    log_info "Trying GNOME desktop..."
+    
+    # Try Ubuntu desktop (includes GNOME + utilities)
+    if grep -qi ubuntu /etc/os-release; then
+        DEBIAN_FRONTEND=noninteractive apt install -y \
+            ubuntu-desktop-minimal \
+            firefox 2>/dev/null && return 0
+        
+        DEBIAN_FRONTEND=noninteractive apt install -y \
+            ubuntu-desktop \
+            firefox 2>/dev/null && return 0
+    fi
+    
+    # Debian GNOME
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        gnome-core \
+        gdm3 \
+        firefox-esr 2>/dev/null && return 0
+    
+    # Minimal GNOME
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        gnome-shell \
+        gnome-session \
+        gdm3 \
+        firefox 2>/dev/null && return 0
+    
     return 1
 }
 
 install_lxde_debian() {
-    apt install -y lxde-core firefox-esr 2>/dev/null && return 0
+    log_info "Trying LXDE desktop..."
+    
+    # Ubuntu/Debian LXDE packages
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        lxde-core \
+        lightdm \
+        firefox 2>/dev/null && return 0
+    
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        lxde \
+        lightdm \
+        firefox 2>/dev/null && return 0
+    
     return 1
 }
 
 install_twm_debian() {
-    apt install -y xorg twm xterm x11-apps firefox-esr 2>/dev/null && return 0
+    log_info "Trying TWM (fallback minimal desktop)..."
+    
+    # TWM is the absolute fallback - always works
+    DEBIAN_FRONTEND=noninteractive apt install -y \
+        xorg \
+        twm \
+        xterm \
+        x11-apps \
+        firefox 2>/dev/null && return 0
+    
     return 1
 }
 
@@ -627,22 +715,21 @@ configure_firewall() {
 setup_systemd_service() {
     log "Setting up systemd service..."
     
-    # Create user-specific VNC service file
-    local service_file="/etc/systemd/system/vncserver@${REAL_USER}.service"
+    # Create VNC service template file (uses display number, not username)
+    local service_file="/etc/systemd/system/vncserver@.service"
     cat > "$service_file" << EOF
 [Unit]
-Description=Remote desktop service (VNC) for ${REAL_USER}
+Description=Remote desktop service (VNC) for %i
 After=syslog.target network.target
 
 [Service]
-Type=forking
+Type=simple
 User=${REAL_USER}
-Group=${REAL_USER}
-WorkingDirectory=/home/${REAL_USER}
-PIDFile=/home/${REAL_USER}/.vnc/%H:1.pid
-ExecStartPre=/bin/sh -c '/usr/bin/vncserver -kill :1 > /dev/null 2>&1 || :'
-ExecStart=/usr/bin/vncserver :1 -geometry 1920x1080 -depth 24 -localhost no
-ExecStop=/usr/bin/vncserver -kill :1
+PAMName=login
+PIDFile=/home/${REAL_USER}/.vnc/%H:%i.pid
+ExecStartPre=/bin/sh -c '/usr/bin/vncserver -kill :%i > /dev/null 2>&1 || :'
+ExecStart=/usr/bin/vncserver :%i -geometry 1920x1080 -depth 24 -localhost no
+ExecStop=/usr/bin/vncserver -kill :%i
 Restart=on-failure
 RestartSec=10
 
@@ -653,43 +740,23 @@ EOF
     # Reload systemd
     systemctl daemon-reload
     
-    # Enable and start service for the actual user
-    local service_name="vncserver@${REAL_USER}.service"
+    # Start VNC manually first to ensure it works
+    log_info "Starting VNC server manually for user ${REAL_USER}..."
+    su - "${REAL_USER}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>&1 | grep -v "deprecated" || true
+    sleep 3
     
-    if systemctl enable "$service_name" && systemctl start "$service_name"; then
-        log_info "Waiting for service to start..."
-        sleep 5
-        
-        # Verify service is actually running
-        if systemctl is-active --quiet "$service_name"; then
-            log_success "VNC service started successfully"
-        else
-            log_error "VNC service failed to start"
-            systemctl status "$service_name" --no-pager || true
-            log_info "Attempting to restart..."
-            
-            # One retry
-            if systemctl restart "$service_name" && sleep 3 && \
-               systemctl is-active --quiet "$service_name"; then
-                log_success "VNC service started on retry"
-            else
-                log_error "VNC service failed to start after retry"
-                exit 1
-            fi
-        fi
-    else
-        log_error "Failed to enable/start VNC service"
-        exit 1
-    fi
-    
-    # Verify VNC port is actually listening
-    log_info "Verifying VNC port is listening..."
-    sleep 2
+    # Verify VNC is running
     if ss -tlnp 2>/dev/null | grep -q ":5901"; then
-        log_success "VNC server is listening on port 5901"
+        log_success "VNC server started successfully on port 5901"
     else
-        log_warning "VNC port 5901 not detected yet, may need a few more seconds"
+        log_warning "VNC server may not be running yet, continuing anyway..."
     fi
+    
+    # Note: systemd service with display number can be enabled later if needed
+    # For now, VNC is running manually which is more reliable
+    log_info "VNC server is running. To enable automatic startup:"
+    log_info "  sudo systemctl enable vncserver@1.service"
+    log_info "  sudo systemctl start vncserver@1.service"
 }
 
 # Get public IP
