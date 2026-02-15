@@ -497,6 +497,8 @@ configure_vnc() {
     # Create VNC directory
     VNC_DIR="$REAL_HOME/.vnc"
     mkdir -p "$VNC_DIR"
+    chown -R "$REAL_USER:$REAL_USER" "$VNC_DIR"
+    chmod 700 "$VNC_DIR"
     
     # Set VNC password if not exists
     if [ ! -f "$VNC_DIR/passwd" ]; then
