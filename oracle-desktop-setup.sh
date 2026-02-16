@@ -735,11 +735,11 @@ setup_systemd_service() {
     local service_file="/etc/systemd/system/vncserver@.service"
     cat > "$service_file" << EOF
 [Unit]
-Description=Remote desktop service (VNC) for %i
+Description=Remote desktop service (VNC) for display :%i
 After=syslog.target network.target
 
 [Service]
-Type=simple
+Type=forking
 User=${REAL_USER}
 PAMName=login
 PIDFile=/home/${REAL_USER}/.vnc/%H:%i.pid
@@ -756,10 +756,18 @@ EOF
     # Reload systemd
     systemctl daemon-reload
     
-    # Start VNC manually first to ensure it works
-    log_info "Starting VNC server manually for user ${REAL_USER}..."
-    su - "${REAL_USER}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>&1 | grep -v "deprecated" || true
+    # Start VNC via systemd
+    log_info "Starting VNC server for user ${REAL_USER}..."
+    systemctl enable vncserver@1.service 2>/dev/null || true
+    systemctl start vncserver@1.service 2>/dev/null || true
     sleep 3
+    
+    # If systemd failed, fall back to manual start
+    if ! ss -tlnp 2>/dev/null | grep -q ":5901"; then
+        log_warning "Systemd start failed, starting VNC manually..."
+        su - "${REAL_USER}" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>&1 | grep -v "deprecated" || true
+        sleep 3
+    fi
     
     # Verify VNC is running
     if ss -tlnp 2>/dev/null | grep -q ":5901"; then
@@ -788,9 +796,36 @@ create_management_scripts() {
     # Create restart script - using actual user
     cat > /usr/local/bin/vnc-restart << 'EOFSCRIPT'
 #!/bin/bash
-systemctl restart "vncserver@1.service"
-echo "VNC server restarted"
-systemctl status "vncserver@1.service" --no-pager
+REAL_USER="${SUDO_USER:-$(whoami)}"
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+
+# Kill existing VNC sessions
+vncserver -kill :1 2>/dev/null || true
+pkill -9 Xvnc 2>/dev/null || true
+sleep 2
+
+# Clean stale lock files
+rm -f /tmp/.X1-lock 2>/dev/null || true
+rm -f /tmp/.X11-unix/X1 2>/dev/null || true
+
+# Try systemd first
+systemctl daemon-reload
+systemctl start vncserver@1.service 2>/dev/null
+sleep 3
+
+# If systemd failed, fall back to manual start
+if ! ss -tlnp 2>/dev/null | grep -q ":5901"; then
+    echo "Systemd service failed, starting VNC manually..."
+    su - "$REAL_USER" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>/dev/null || true
+    sleep 3
+fi
+
+# Verify
+if ss -tlnp 2>/dev/null | grep -q ":5901"; then
+    echo "VNC server is running on port 5901"
+else
+    echo "ERROR: VNC server failed to start. Check: sudo vnc-logs"
+fi
 EOFSCRIPT
     
     # Create status script
@@ -1033,6 +1068,30 @@ fi
 exec startxfce4
 EOF
             ;;
+        gnome)
+            cat > "$REAL_HOME/.vnc/xstartup" << 'EOF'
+#!/bin/bash
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    eval $(dbus-launch --sh-syntax --exit-with-session)
+fi
+[ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
+exec gnome-session
+EOF
+            ;;
+        lxde)
+            cat > "$REAL_HOME/.vnc/xstartup" << 'EOF'
+#!/bin/bash
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    eval $(dbus-launch --sh-syntax --exit-with-session)
+fi
+[ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
+exec startlxde
+EOF
+            ;;
         *)
             cat > "$REAL_HOME/.vnc/xstartup" << 'EOF'
 #!/bin/sh
@@ -1077,23 +1136,30 @@ rm -f "$REAL_HOME/.vnc/*.pid" 2>/dev/null || true
 rm -f "/tmp/.X1-lock" 2>/dev/null || true
 rm -f "/tmp/.X11-unix/X1" 2>/dev/null || true
 
-# Fix 6: Restart service
+# Fix 6: Restart VNC service
 echo "[6/6] Restarting VNC service..."
 systemctl daemon-reload
 systemctl enable "vncserver@1.service" 2>/dev/null || true
-systemctl start "vncserver@1.service"
-sleep 5
+systemctl start "vncserver@1.service" 2>/dev/null || true
+sleep 3
+
+# If systemd failed, fall back to manual start
+if ! ss -tlnp 2>/dev/null | grep -q ":5901"; then
+    echo "  → Systemd failed, starting VNC manually..."
+    su - "$REAL_USER" -c "vncserver :1 -geometry 1920x1080 -depth 24 -localhost no" 2>/dev/null || true
+    sleep 3
+fi
 
 # Check status
 echo ""
 echo -e "${YELLOW}═══ Status Check ═══${NC}"
-if systemctl is-active --quiet "vncserver@1.service"; then
-    echo -e "${GREEN}✓ VNC service is running${NC}"
+if ss -tlnp 2>/dev/null | grep -q ":5901"; then
+    echo -e "${GREEN}✓ VNC server is running on port 5901${NC}"
 else
-    echo -e "${RED}✗ VNC service failed to start${NC}"
+    echo -e "${RED}✗ VNC server failed to start${NC}"
     echo ""
     echo "Service logs:"
-    journalctl -u "vncserver@1.service" -n 20 --no-pager
+    journalctl -u "vncserver@1.service" -n 20 --no-pager 2>/dev/null || true
 fi
 
 echo ""
