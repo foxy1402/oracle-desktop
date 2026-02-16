@@ -29,7 +29,7 @@ NC='\033[0m'
 
 # Logging
 LOG_FILE="/var/log/oracle-desktop-setup.log"
-TEMP_DESKTOP_FILE="/var/run/oracle-desktop-type"
+TEMP_DESKTOP_FILE="/etc/oracle-desktop-type"
 
 # Error handling
 handle_error() {
@@ -224,6 +224,12 @@ install_vnc() {
             ;;
     esac
     
+    # Verify VNC was actually installed
+    if ! command -v vncserver >/dev/null 2>&1 && ! command -v Xvnc >/dev/null 2>&1; then
+        log_error "VNC server installation failed - neither vncserver nor Xvnc found"
+        exit 1
+    fi
+    
     log_success "VNC server installed"
 }
 
@@ -234,6 +240,13 @@ install_desktop() {
     # Try multiple desktop environments in order of preference
     DESKTOPS=("mate" "xfce" "gnome" "lxde" "twm")
     INSTALLED_DESKTOP=""
+    
+    # CRITICAL: Disable set -e during desktop fallback loop.
+    # Desktop installer functions return 1 to signal failure, which
+    # triggers the ERR trap under set -e and kills the entire script
+    # instead of trying the next desktop.
+    set +e
+    trap - ERR
     
     for desktop in "${DESKTOPS[@]}"; do
         log_info "Attempting to install $desktop desktop..."
@@ -310,13 +323,17 @@ install_desktop() {
         esac
     done
     
+    # Re-enable set -e and ERR trap
+    set -e
+    trap 'handle_error $? $LINENO' ERR
+    
     if [ -z "$INSTALLED_DESKTOP" ]; then
         log_error "Failed to install any desktop environment"
         exit 1
     fi
     
     log_success "Desktop environment installed: $INSTALLED_DESKTOP"
-    # Store securely with proper permissions
+    # Store persistently (not /var/run which is tmpfs and cleared on reboot)
     echo "$INSTALLED_DESKTOP" > "$TEMP_DESKTOP_FILE"
     chmod 644 "$TEMP_DESKTOP_FILE"
 }
@@ -520,7 +537,16 @@ configure_vnc() {
         # vncpasswd writes to /root/.vnc/passwd instead of the target
         # user's .vnc directory. This is the root cause of the
         # "VNC password file not created" error on reinstall.
-        if runuser -u "$REAL_USER" -- vncpasswd "$VNC_DIR/passwd"; then
+        #
+        # Use runuser if available (RHEL/Oracle), fall back to su (Ubuntu/Debian)
+        local vnc_pwd_ok=0
+        if command -v runuser >/dev/null 2>&1; then
+            runuser -u "$REAL_USER" -- vncpasswd "$VNC_DIR/passwd" && vnc_pwd_ok=1
+        else
+            su - "$REAL_USER" -c "vncpasswd '$VNC_DIR/passwd'" && vnc_pwd_ok=1
+        fi
+        
+        if [[ $vnc_pwd_ok -eq 1 ]]; then
             log_success "VNC password set successfully"
         else
             log_error "Failed to set VNC password"
@@ -742,7 +768,7 @@ After=syslog.target network.target
 Type=forking
 User=${REAL_USER}
 PAMName=login
-PIDFile=/home/${REAL_USER}/.vnc/%H:%i.pid
+PIDFile=${REAL_HOME}/.vnc/%H:%i.pid
 ExecStartPre=/bin/sh -c '/usr/bin/vncserver -kill :%i > /dev/null 2>&1 || :'
 ExecStart=/usr/bin/vncserver :%i -geometry 1920x1080 -depth 24 -localhost no
 ExecStop=/usr/bin/vncserver -kill :%i
@@ -847,7 +873,7 @@ EOFSCRIPT
 #!/bin/bash
 REAL_USER="${SUDO_USER:-$(whoami)}"
 echo "=== VNC Service Logs ==="
-journalctl -u "vncserver@${REAL_USER}.service" -n 50 --no-pager 2>/dev/null || \
+journalctl -u "vncserver@1.service" -n 50 --no-pager 2>/dev/null || \
     echo "No service logs found"
 echo ""
 echo "=== VNC Session Logs ==="
@@ -889,15 +915,18 @@ PASS=0
 FAIL=0
 REAL_USER="${SUDO_USER:-$(whoami)}"
 
-# Check VNC service
+# Check VNC service (systemd or manual)
 echo -n "VNC Service Status: "
 if systemctl is-active --quiet "vncserver@1.service" 2>/dev/null; then
-    echo -e "${GREEN}✓ RUNNING${NC}"
+    echo -e "${GREEN}✓ RUNNING (systemd)${NC}"
+    ((PASS++))
+elif ss -tlnp 2>/dev/null | grep -q ":5901"; then
+    echo -e "${GREEN}✓ RUNNING (manual)${NC}"
     ((PASS++))
 else
     echo -e "${RED}✗ STOPPED${NC}"
     ((FAIL++))
-    echo "  → Run: sudo systemctl start vncserver@1.service"
+    echo "  → Run: sudo vnc-restart"
 fi
 
 # Check VNC port
@@ -913,7 +942,7 @@ fi
 
 # Check desktop environment
 echo -n "Desktop Environment: "
-DESKTOP=$(cat /var/run/oracle-desktop-type 2>/dev/null || cat /tmp/installed_desktop.txt 2>/dev/null || echo "unknown")
+DESKTOP=$(cat /etc/oracle-desktop-type 2>/dev/null || cat /var/run/oracle-desktop-type 2>/dev/null || cat /tmp/installed_desktop.txt 2>/dev/null || echo "unknown")
 if [ "$DESKTOP" != "unknown" ]; then
     echo -e "${GREEN}✓ $DESKTOP${NC}"
     ((PASS++))
@@ -1039,7 +1068,7 @@ fi
 echo "[2/6] Checking xstartup configuration..."
 if [[ ! -f "$REAL_HOME/.vnc/xstartup" ]] || [[ ! -x "$REAL_HOME/.vnc/xstartup" ]]; then
     echo "  → Recreating xstartup file..."
-    DESKTOP=$(cat /var/run/oracle-desktop-type 2>/dev/null || cat /tmp/installed_desktop.txt 2>/dev/null || echo "twm")
+    DESKTOP=$(cat /etc/oracle-desktop-type 2>/dev/null || cat /var/run/oracle-desktop-type 2>/dev/null || cat /tmp/installed_desktop.txt 2>/dev/null || echo "twm")
     
     mkdir -p "$REAL_HOME/.vnc"
     
@@ -1132,7 +1161,7 @@ fi
 
 # Fix 5: Clean up lock files
 echo "[5/6] Cleaning lock files..."
-rm -f "$REAL_HOME/.vnc/*.pid" 2>/dev/null || true
+rm -f "$REAL_HOME"/.vnc/*.pid 2>/dev/null || true
 rm -f "/tmp/.X1-lock" 2>/dev/null || true
 rm -f "/tmp/.X11-unix/X1" 2>/dev/null || true
 

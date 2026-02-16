@@ -185,7 +185,7 @@ vncserver :1 -geometry 1920x1080 -depth 24 -localhost no
 
 ```bash
 # Check which desktop is installed
-cat /var/run/oracle-desktop-type
+cat /etc/oracle-desktop-type
 
 # For MATE
 cat > ~/.vnc/xstartup << 'EOF'
@@ -327,7 +327,7 @@ Important files and directories:
 /etc/systemd/system/
 └── vncserver@.service   # Systemd service template
 
-/var/run/oracle-desktop-type      # Which desktop was installed
+/etc/oracle-desktop-type          # Which desktop was installed
 ```
 
 ---

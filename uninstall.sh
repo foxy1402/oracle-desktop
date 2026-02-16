@@ -94,6 +94,7 @@ echo -e "${BLUE}[6/7]${NC} Removing logs and temporary files..."
 rm -f /var/log/oracle-desktop-setup.log
 rm -f /tmp/installed_desktop.txt
 rm -f /var/run/oracle-desktop-type
+rm -f /etc/oracle-desktop-type
 # Clean up any leftover VNC temp files
 rm -rf /tmp/.X11-unix/X1 2>/dev/null || true
 rm -f /tmp/.X1-lock 2>/dev/null || true
@@ -116,7 +117,7 @@ fi
 
 # Ask about desktop environment
 echo ""
-DESKTOP=$(cat /var/run/oracle-desktop-type 2>/dev/null || cat /tmp/installed_desktop.txt 2>/dev/null || echo "unknown")
+DESKTOP=$(cat /etc/oracle-desktop-type 2>/dev/null || cat /var/run/oracle-desktop-type 2>/dev/null || cat /tmp/installed_desktop.txt 2>/dev/null || echo "unknown")
 if [ "$DESKTOP" != "unknown" ] && [ "$DESKTOP" != "twm" ]; then
     echo -e "${YELLOW}Desktop environment detected: $DESKTOP${NC}"
     read -p "Do you want to remove the desktop environment? (yes/no): " remove_desktop
