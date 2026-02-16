@@ -75,7 +75,11 @@ echo -e "${GREEN}✓ Management scripts removed${NC}"
 
 echo -e "${BLUE}[4/7]${NC} Removing VNC configuration..."
 REAL_HOME=$(eval echo ~$REAL_USER)
+# Force remove .vnc directory and all contents as root to ensure cleanup
 rm -rf "$REAL_HOME/.vnc"
+# Also clean up any VNC-related processes
+pkill -9 -u "$REAL_USER" Xvnc 2>/dev/null || true
+pkill -9 -u "$REAL_USER" vncserver 2>/dev/null || true
 echo -e "${GREEN}✓ VNC configuration removed${NC}"
 
 echo -e "${BLUE}[5/7]${NC} Closing firewall ports..."
@@ -89,6 +93,10 @@ echo -e "${GREEN}✓ Firewall ports closed${NC}"
 echo -e "${BLUE}[6/7]${NC} Removing logs and temporary files..."
 rm -f /var/log/oracle-desktop-setup.log
 rm -f /tmp/installed_desktop.txt
+rm -f /var/run/oracle-desktop-type
+# Clean up any leftover VNC temp files
+rm -rf /tmp/.X11-unix/X1 2>/dev/null || true
+rm -f /tmp/.X1-lock 2>/dev/null || true
 echo -e "${GREEN}✓ Logs removed${NC}"
 
 echo -e "${BLUE}[7/7]${NC} Removing VNC server..."
