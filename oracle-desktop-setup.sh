@@ -511,8 +511,8 @@ configure_vnc() {
             exit 1
         fi
         
-        # Run vncpasswd and check if successful
-        if su - "$REAL_USER" -c "vncpasswd"; then
+        # Run vncpasswd as the user, ensuring it writes to the correct location
+        if su "$REAL_USER" -c "HOME='$REAL_HOME' vncpasswd"; then
             log_success "VNC password set successfully"
         else
             log_error "Failed to set VNC password"
