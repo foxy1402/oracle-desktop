@@ -511,26 +511,14 @@ configure_vnc() {
             exit 1
         fi
         
-        # Create a script to run vncpasswd with proper environment
-        cat > /tmp/set-vnc-password.sh << 'EOFSCRIPT'
-#!/bin/bash
-export HOME="$1"
-export USER="$2"
-cd "$HOME"
-vncpasswd
-EOFSCRIPT
-        chmod +x /tmp/set-vnc-password.sh
-        
-        # Run vncpasswd script as the target user
-        if su - "$REAL_USER" -c "/tmp/set-vnc-password.sh '$REAL_HOME' '$REAL_USER'"; then
+        # Use runuser instead of su to avoid environment pollution
+        # runuser doesn't load PAM environment which avoids the Windows HOME issue
+        if runuser -u "$REAL_USER" -- vncpasswd; then
             log_success "VNC password set successfully"
         else
             log_error "Failed to set VNC password"
-            rm -f /tmp/set-vnc-password.sh
             exit 1
         fi
-        
-        rm -f /tmp/set-vnc-password.sh
         
         # Verify password file was created
         if [[ ! -f "$VNC_DIR/passwd" ]]; then
@@ -538,6 +526,9 @@ EOFSCRIPT
             log_error "Debug: VNC_DIR=$VNC_DIR, REAL_HOME=$REAL_HOME"
             log_error "Directory contents:"
             ls -la "$VNC_DIR" 2>&1 | tee -a "$LOG_FILE"
+            # Try to find where it was actually created
+            log_error "Searching for passwd files created by $REAL_USER:"
+            find / -name passwd -user "$REAL_USER" -mmin -2 2>/dev/null | tee -a "$LOG_FILE"
             exit 1
         fi
     else
