@@ -74,7 +74,7 @@ rm -f /usr/local/bin/vnc-heal
 echo -e "${GREEN}✓ Management scripts removed${NC}"
 
 echo -e "${BLUE}[4/7]${NC} Removing VNC configuration..."
-REAL_HOME=$(eval echo ~$REAL_USER)
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
 # Force remove .vnc directory and all contents as root to ensure cleanup
 rm -rf "$REAL_HOME/.vnc"
 # Also clean up any VNC-related processes
@@ -116,29 +116,46 @@ fi
 
 # Ask about desktop environment
 echo ""
-DESKTOP=$(cat /tmp/installed_desktop.txt 2>/dev/null || echo "unknown")
+DESKTOP=$(cat /var/run/oracle-desktop-type 2>/dev/null || cat /tmp/installed_desktop.txt 2>/dev/null || echo "unknown")
 if [ "$DESKTOP" != "unknown" ] && [ "$DESKTOP" != "twm" ]; then
     echo -e "${YELLOW}Desktop environment detected: $DESKTOP${NC}"
     read -p "Do you want to remove the desktop environment? (yes/no): " remove_desktop
     
     if [ "$remove_desktop" = "yes" ]; then
-        case $DESKTOP in
-            mate)
-                dnf groupremove -y "MATE Desktop" 2>/dev/null || \
-                dnf remove -y mate-desktop mate-session-manager 2>/dev/null
-                ;;
-            xfce)
-                dnf groupremove -y "Xfce" 2>/dev/null || \
-                dnf remove -y @xfce-desktop-environment 2>/dev/null
-                ;;
-            gnome)
-                dnf groupremove -y "Server with GUI" 2>/dev/null || \
-                dnf groupremove -y "GNOME Desktop" 2>/dev/null
-                ;;
-            lxde)
-                dnf remove -y @lxde-desktop 2>/dev/null
-                ;;
-        esac
+        if command -v dnf >/dev/null 2>&1; then
+            case $DESKTOP in
+                mate)
+                    dnf groupremove -y "MATE Desktop" 2>/dev/null || \
+                    dnf remove -y mate-desktop mate-session-manager 2>/dev/null
+                    ;;
+                xfce)
+                    dnf groupremove -y "Xfce" 2>/dev/null || \
+                    dnf remove -y @xfce-desktop-environment 2>/dev/null
+                    ;;
+                gnome)
+                    dnf groupremove -y "Server with GUI" 2>/dev/null || \
+                    dnf groupremove -y "GNOME Desktop" 2>/dev/null
+                    ;;
+                lxde)
+                    dnf remove -y @lxde-desktop 2>/dev/null
+                    ;;
+            esac
+        elif command -v apt >/dev/null 2>&1; then
+            case $DESKTOP in
+                mate)
+                    DEBIAN_FRONTEND=noninteractive apt remove -y mate-desktop-environment-core 2>/dev/null || true
+                    ;;
+                xfce)
+                    DEBIAN_FRONTEND=noninteractive apt remove -y xfce4 2>/dev/null || true
+                    ;;
+                gnome)
+                    DEBIAN_FRONTEND=noninteractive apt remove -y ubuntu-desktop-minimal ubuntu-desktop gnome-core gnome-shell 2>/dev/null || true
+                    ;;
+                lxde)
+                    DEBIAN_FRONTEND=noninteractive apt remove -y lxde-core lxde 2>/dev/null || true
+                    ;;
+            esac
+        fi
         echo -e "${GREEN}✓ Desktop environment removed${NC}"
     else
         echo -e "${YELLOW}! Desktop environment kept${NC}"
@@ -151,6 +168,9 @@ echo -e "${BLUE}Running final cleanup...${NC}"
 if command -v dnf >/dev/null 2>&1; then
     dnf autoremove -y
     dnf clean all
+elif command -v apt >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt autoremove -y
+    apt clean
 fi
 
 echo ""

@@ -494,6 +494,10 @@ install_twm_debian() {
 configure_vnc() {
     log "Configuring VNC for user $REAL_USER..."
     
+    # Clean up stale VNC lock files from previous installs
+    rm -f /tmp/.X*-lock 2>/dev/null || true
+    rm -rf /tmp/.X11-unix/X* 2>/dev/null || true
+    
     # Create VNC directory
     VNC_DIR="$REAL_HOME/.vnc"
     mkdir -p "$VNC_DIR"
@@ -511,9 +515,12 @@ configure_vnc() {
             exit 1
         fi
         
-        # Use runuser instead of su to avoid environment pollution
-        # runuser doesn't load PAM environment which avoids the Windows HOME issue
-        if runuser -u "$REAL_USER" -- vncpasswd; then
+        # CRITICAL: Pass the explicit output path to vncpasswd.
+        # runuser does NOT reset HOME, so without an explicit path,
+        # vncpasswd writes to /root/.vnc/passwd instead of the target
+        # user's .vnc directory. This is the root cause of the
+        # "VNC password file not created" error on reinstall.
+        if runuser -u "$REAL_USER" -- vncpasswd "$VNC_DIR/passwd"; then
             log_success "VNC password set successfully"
         else
             log_error "Failed to set VNC password"
@@ -781,19 +788,17 @@ create_management_scripts() {
     # Create restart script - using actual user
     cat > /usr/local/bin/vnc-restart << 'EOFSCRIPT'
 #!/bin/bash
-REAL_USER="${SUDO_USER:-$(whoami)}"
-systemctl restart "vncserver@${REAL_USER}.service"
-echo "VNC server restarted for user: $REAL_USER"
-systemctl status "vncserver@${REAL_USER}.service" --no-pager
+systemctl restart "vncserver@1.service"
+echo "VNC server restarted"
+systemctl status "vncserver@1.service" --no-pager
 EOFSCRIPT
     
     # Create status script
     cat > /usr/local/bin/vnc-status << 'EOFSCRIPT'
 #!/bin/bash
-REAL_USER="${SUDO_USER:-$(whoami)}"
 echo "=== VNC Server Status ==="
-systemctl status "vncserver@${REAL_USER}.service" --no-pager 2>/dev/null || \
-    echo "Service not found for user $REAL_USER"
+systemctl status "vncserver@1.service" --no-pager 2>/dev/null || \
+    echo "VNC service not found"
 echo ""
 echo "=== Active VNC Sessions ==="
 ps aux | grep "[X]vnc" || echo "No VNC processes found"
@@ -849,15 +854,15 @@ PASS=0
 FAIL=0
 REAL_USER="${SUDO_USER:-$(whoami)}"
 
-# Check VNC service for actual user
-echo -n "VNC Service Status ($REAL_USER): "
-if systemctl is-active --quiet "vncserver@${REAL_USER}.service" 2>/dev/null; then
+# Check VNC service
+echo -n "VNC Service Status: "
+if systemctl is-active --quiet "vncserver@1.service" 2>/dev/null; then
     echo -e "${GREEN}✓ RUNNING${NC}"
     ((PASS++))
 else
     echo -e "${RED}✗ STOPPED${NC}"
     ((FAIL++))
-    echo "  → Run: sudo systemctl start vncserver@${REAL_USER}.service"
+    echo "  → Run: sudo systemctl start vncserver@1.service"
 fi
 
 # Check VNC port
@@ -985,7 +990,7 @@ fi
 
 # Fix 1: Stop any stale processes first (gracefully)
 echo "[1/6] Stopping stale VNC processes..."
-systemctl stop "vncserver@${REAL_USER}.service" 2>/dev/null || true
+systemctl stop "vncserver@1.service" 2>/dev/null || true
 sleep 2
 
 # Check if still running, then force kill
@@ -1075,20 +1080,20 @@ rm -f "/tmp/.X11-unix/X1" 2>/dev/null || true
 # Fix 6: Restart service
 echo "[6/6] Restarting VNC service..."
 systemctl daemon-reload
-systemctl enable "vncserver@${REAL_USER}.service" 2>/dev/null || true
-systemctl start "vncserver@${REAL_USER}.service"
+systemctl enable "vncserver@1.service" 2>/dev/null || true
+systemctl start "vncserver@1.service"
 sleep 5
 
 # Check status
 echo ""
 echo -e "${YELLOW}═══ Status Check ═══${NC}"
-if systemctl is-active --quiet "vncserver@${REAL_USER}.service"; then
+if systemctl is-active --quiet "vncserver@1.service"; then
     echo -e "${GREEN}✓ VNC service is running${NC}"
 else
     echo -e "${RED}✗ VNC service failed to start${NC}"
     echo ""
     echo "Service logs:"
-    journalctl -u "vncserver@${REAL_USER}.service" -n 20 --no-pager
+    journalctl -u "vncserver@1.service" -n 20 --no-pager
 fi
 
 echo ""
