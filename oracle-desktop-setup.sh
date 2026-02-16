@@ -511,14 +511,26 @@ configure_vnc() {
             exit 1
         fi
         
-        # Run vncpasswd with proper environment and stdin
-        # Using su without - but setting HOME explicitly to preserve TTY
-        if sudo -u "$REAL_USER" HOME="$REAL_HOME" vncpasswd; then
+        # Create a script to run vncpasswd with proper environment
+        cat > /tmp/set-vnc-password.sh << 'EOFSCRIPT'
+#!/bin/bash
+export HOME="$1"
+export USER="$2"
+cd "$HOME"
+vncpasswd
+EOFSCRIPT
+        chmod +x /tmp/set-vnc-password.sh
+        
+        # Run vncpasswd script as the target user
+        if su - "$REAL_USER" -c "/tmp/set-vnc-password.sh '$REAL_HOME' '$REAL_USER'"; then
             log_success "VNC password set successfully"
         else
             log_error "Failed to set VNC password"
+            rm -f /tmp/set-vnc-password.sh
             exit 1
         fi
+        
+        rm -f /tmp/set-vnc-password.sh
         
         # Verify password file was created
         if [[ ! -f "$VNC_DIR/passwd" ]]; then
